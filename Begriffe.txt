@@ -1,0 +1,34 @@
+Inversion of Control (Content Dependency Injection)
+@Component # Stellt die Komponente unter die Verwaltung von Spring
+	@Controller, @Service, @Repository
+	   @RestController
+@Scope (prototype|singleton)
+
+@RequestScope, @SessionScope // Machen nur bei Webanwendungen Sinn
+
+@Lazy
+	
+@PostConstruct @PreDestroy
+	Dreissatz beim Erzeugen 
+		1. Constructor // Von Spring empfohlen
+		2. Setter- oder Fieldinjection
+		3. PostConstruct
+		
+	@PreDestroy nur bei Singleton sinnvoll, weil Protoype nicht verwaltet wird
+	
+@Autowired (Objekten) / @Value (Werte und Strings)
+	Standard by Type
+	Im Konfliktfall by Name
+	
+Konflikte aufloesen
+	Variablenname (schlecht)
+	@Primary
+	@Qualifier
+	@Profile
+	
+@Configuration
+	Springklasse für technische Aufgaben (Konfiguration, stellt u.a. Fabriken bereit)
+	@Bean Fabrik (Parameter werden ggf. injiziert)
+	
+@ConfigurationProperties(prefix = "mail")
+@PropertySource(value= "classpath:mail.yml",  factory = YamlPropertySourceFactory.class)
