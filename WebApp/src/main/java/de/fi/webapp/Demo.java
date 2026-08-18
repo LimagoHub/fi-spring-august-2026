@@ -21,7 +21,7 @@ public class Demo {
         //PersonEntity p = PersonEntity.builder().id(UUID.randomUUID()).vorname("Max").nachname("Mustermann").build();
         //personenRepository.save(p);
 
-        var maxe = personenRepository.findAll();
+        var maxe = personenRepository.findAllProjectByVorname("Steffie");
 
         maxe.forEach(System.out::println);
 

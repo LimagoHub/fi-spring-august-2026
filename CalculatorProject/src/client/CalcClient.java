@@ -14,6 +14,6 @@ public class CalcClient {
 
     public void go() {
 
-        System.out.println(calculator.add(1, 2) );
+        System.out.println(calculator.sub(1, 2) );
     }
 }
