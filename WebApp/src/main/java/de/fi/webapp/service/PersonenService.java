@@ -13,4 +13,7 @@ public interface PersonenService {
     void loeschen(UUID uuid) throws PersonenServiceException;
     Optional<Person> findeNachId(UUID uuid)throws PersonenServiceException ;
     Iterable<Person> findeAlle()throws PersonenServiceException;
+
+    // fuettern(id)
+    // SchweineServiceException erbt von RunTimeException
 }
