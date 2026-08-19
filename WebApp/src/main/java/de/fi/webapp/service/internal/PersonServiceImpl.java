@@ -8,6 +8,7 @@ import de.fi.webapp.service.exception.NotFoundException;
 import de.fi.webapp.service.exception.PersonenServiceException;
 import de.fi.webapp.service.mapper.PersonMapper;
 import de.fi.webapp.service.model.Person;
+import jakarta.annotation.security.RolesAllowed;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;

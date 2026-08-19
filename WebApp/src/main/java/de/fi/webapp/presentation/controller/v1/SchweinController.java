@@ -1,5 +1,6 @@
 package de.fi.webapp.presentation.controller.v1;
 
+import de.fi.webapp.aspect.Benchmark;
 import de.fi.webapp.presentation.dto.SchweinDto;
 import de.fi.webapp.presentation.exception.IdMismatchException;
 import de.fi.webapp.presentation.mapper.SchweinDtoMapper;
@@ -17,6 +18,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/v1/schweine")
 @RequiredArgsConstructor
+@Benchmark
 public class SchweinController {
 
     private final SchweineService service;

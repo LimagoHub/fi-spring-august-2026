@@ -42,7 +42,7 @@ public class MyAspect {
         log.warn(String.format("############################# After: %s ######################", joinPoint.getSignature().getName()));
 
     }
-    @Around(value="execution(public * de.fi.webapp.presentation.controller.v1.PersonenController.*(..))")
+    @Around("Pointcuts.benchmark()")
     public Object around(ProceedingJoinPoint joinPoint) throws Throwable {
         Instant start = Instant.now();
         Object result = joinPoint.proceed();
