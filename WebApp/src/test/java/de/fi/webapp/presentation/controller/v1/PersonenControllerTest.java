@@ -103,16 +103,16 @@ class PersonenControllerTest {
     @Test
     void test5() throws PersonenServiceException {
 
-        var personZumHochladen = new PersonDto(UUID.randomUUID(),"John","Doe");
+       /* var personZumHochladen = new PersonDto(UUID.randomUUID(),"John","Doe");
         HttpEntity<PersonDto> request = new HttpEntity<>(personZumHochladen);
-
+*/
         var personen = List.of(
                 new Person(UUID.randomUUID(),"John","Doe"),
                 new Person(UUID.randomUUID(),"Jane","Doe"));
         when(personenServiceMock.findeAlle()).thenReturn(personen);
 
 
-        var entity = restTemplate.exchange("/v1/personen", HttpMethod.GET,request,new ParameterizedTypeReference<List<PersonDto>>() { }) ;
+        var entity = restTemplate.exchange("/v1/personen", HttpMethod.GET,null,new ParameterizedTypeReference<List<PersonDto>>() { }) ;
 
         var liste = entity.getBody();
         assertEquals(2,liste.size());
