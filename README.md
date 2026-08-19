@@ -2,13 +2,20 @@
 
 Spring Boot Seminar - Skript
 
-Dieses Dokument ist das Vortrags-Skript zum Seminar. Es wird Schritt
-fuer Schritt aufgebaut - jedes Kapitel gehoert zu einem
-Beispielprojekt in diesem Repository:
+Dieses Dokument ist das Vortrags-Skript zum Seminar. Es ist auf drei
+Seminartage aufgeteilt und wird Schritt fuer Schritt aufgebaut -
+jedes Kapitel gehoert zu einem Beispielprojekt in diesem Repository:
 
+**Tag 1**
 1. `CalculatorProject` -> Dependency Injection (DI) OHNE Spring
 2. `SpringConsoleApp` -> Spring-Grundlagen (Bean, Lombok, Konfliktaufloesung, automatische Verdrahtung)
 3. `WebApp` -> REST-Endpoints (Presentation Layer)
+
+**Tag 2**
+4. `WebApp` (Fortsetzung) -> Persistence Layer mit Spring Data, Domain Layer
+
+**Tag 3**
+5. `WebApp` (Fortsetzung) -> Service-/Business-Layer, `@Configuration`/`@Bean`, Fehlerbehandlung, groessere Uebung (`Schwein`)
 
 ---
 
@@ -803,9 +810,790 @@ fuer seine Test-/Fake-Daten nutzt.
 
 ### Noch offen
 
-- **Persistence-, Service- und Domain Layer** fuer `WebApp` -
-  aktuell nur leere Packages (`persistence/`, `service/`), folgen an
-  einem der naechsten Tage.
 - `OtherRunner` (`@Order`) und `Person.java` (Lombok) aus Kapitel 2 -
   vorbereitet, noch nicht im Detail behandelt.
-- `@Configuration`/`@Bean` - bewusst zurueckgestellt.
+
+---
+
+## Tag 2
+
+### Kapitel 3 (Fortsetzung): Persistence Layer (Spring Data JPA) und Domain Layer
+
+Wir bleiben in `WebApp` und gehen jetzt eine Schicht tiefer: Woher
+kommen eigentlich die Daten, die `PersonenController` (Tag 1) ueber
+`service.findeAlle()` bzw. `service.findeNachId(id)` liefert? Die
+Antwort liegt im Package `persistence` - und dort setzt Spring Data
+JPA genau das DI-Prinzip aus Kapitel 1 fort: Wir schreiben ein
+Interface, Spring liefert uns zur Laufzeit die passende
+Implementierung als Bean.
+
+Bewusst zurueckgestellt fuer heute: Wie `PersonServiceImpl` den
+`PersonenRepository` konkret benutzt (Business-/Service-Layer, Tag
+3) - wir schauen uns die Persistence-Schicht zunaechst fuer sich an.
+
+#### 3.4 Vom Java-Objekt zur Datenbanktabelle: `@Entity`
+
+Datei: `WebApp/src/main/java/de/fi/webapp/persistence/entity/PersonEntity.java`
+
+```java
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+
+@Entity
+@Table(name = "tbl_personen")
+public class PersonEntity {
+
+    @Id
+    @Column(nullable = false)
+    private UUID id;
+
+    @Column(nullable = false, length = 50)
+    private String vorname;
+
+    @Column(nullable = false, length = 50)
+    private String nachname;
+}
+```
+
+- `@Entity` stellt die Klasse unter die Verwaltung von JPA/Hibernate -
+  eine Instanz entspricht ab jetzt einer Zeile in einer
+  Datenbanktabelle.
+- `@Table(name = "tbl_personen")` legt fest, in welcher Tabelle diese
+  Zeilen landen (ohne diese Annotation wuerde der Klassenname
+  verwendet) - `src/main/resources/data.sql` befuellt genau diese
+  Tabelle beim Start bereits mit 100 Testdatensaetzen.
+- `@Id` markiert das Feld, das den Primärschlüssel abbildet - hier
+  eine `UUID`, die wir selbst vergeben (kein `@GeneratedValue`).
+- `@Column` steuert Details der Spalte (`nullable`, `length`, ...).
+
+Auffaellig gegenueber Kapitel 2: `PersonEntity` kombiniert Lombok
+(`@Data`/`@NoArgsConstructor`/`@AllArgsConstructor`/`@Builder`) UND
+JPA-Annotationen auf derselben Klasse. Das ist kein Widerspruch -
+Lombok generiert nur Boilerplate (Getter/Setter/Konstruktoren),
+JPA/Hibernate braucht davon vor allem den parameterlosen Konstruktor
+(`@NoArgsConstructor`), um beim Auslesen aus der Datenbank per
+Reflection ein leeres Objekt zu erzeugen und anschliessend zu
+befuellen.
+
+`PersonEntity` sieht `PersonDto` (Tag 1, Presentation Layer) sehr
+aehnlich - beide haben `id`, `vorname`, `nachname`. Trotzdem sind es
+bewusst zwei getrennte Klassen: Die eine beschreibt, WIE Daten ueber
+HTTP transportiert werden (inkl. Bean-Validation-Regeln), die andere,
+WIE Daten in der Datenbank liegen (inkl. Spaltenlaenge, Nullability).
+Beide zu vermischen wuerde die Schichten unnoetig aneinanderketten.
+
+#### 3.5 Repository: Interface statt Implementierung
+
+Datei: `WebApp/src/main/java/de/fi/webapp/persistence/repository/PersonenRepository.java`
+
+```java
+public interface PersonenRepository extends CrudRepository<PersonEntity, UUID> {
+
+    Iterable<PersonEntity> findByVorname(String vorname);
+
+    @Query("select new de.fi.webapp.persistence.entity.TinyPerson(p.id, p.nachname) from PersonEntity p")
+    Iterable<TinyPerson> egal();
+
+    Iterable<TinyPerson> findAllProjectByVorname(String vorname);
+}
+```
+
+Das ist der eigentliche "Aha-Moment" von Spring Data:
+`PersonenRepository` ist nur ein **Interface** - es gibt nirgendwo im
+Projekt eine Klasse, die `implements PersonenRepository` schreibt und
+`save()`, `findById()` oder `findAll()` von Hand implementiert.
+Trotzdem laesst sich `PersonenRepository` ganz normal per Konstruktor
+injizieren (siehe `PersonServiceImpl`, Tag 3) und funktioniert.
+
+Der Grund: Spring Data erzeugt zur Laufzeit selbst eine
+Implementierung dieses Interfaces und registriert sie als Bean -
+technisch ueber genau das Prinzip, das wir in Kapitel 1 an
+`LoggerProxy` von Hand nachgebaut haben (ein dynamischer Proxy, der
+Methodenaufrufe abfaengt und behandelt). Nur muessen wir diesmal
+selbst keine Zeile Proxy-Code schreiben - `CrudRepository` bringt
+bereits alle Standard-Operationen mit: `save(entity)`,
+`findById(id)` -> `Optional<T>`, `findAll()`, `existsById(id)`,
+`deleteById(id)`.
+
+#### 3.6 Abgeleitete Query-Methoden - Namenskonvention statt SQL
+
+```java
+Iterable<PersonEntity> findByVorname(String vorname);
+```
+
+Diese Methode steht nur als Signatur im Interface - keine
+Implementierung, kein `@Query`. Spring Data liest den
+**Methodennamen** und leitet daraus die Abfrage ab: `findBy` +
+`Vorname` (der Feldname aus `PersonEntity`) wird zu `SELECT ... FROM
+tbl_personen WHERE vorname = ?`.
+
+Das ist die einzige Form von "eigenen Abfragen", die wir heute im
+Detail anfassen: **Namenskonvention statt SQL/JPQL.** Die beiden
+anderen Methoden im selben Interface stehen zwar schon da, zeigen
+aber bereits komplexeres Terrain:
+
+> **Bewusst nicht vertieft heute:** `egal()` nutzt eigenes JPQL
+> (`@Query(...)`), das direkt ein `TinyPerson`-Projektions-Objekt
+> erzeugt (ein `record` mit nur `id`/`nachname`, siehe
+> `persistence/entity/TinyPerson.java`) - nuetzlich, wenn man nicht
+> alle Spalten einer Entity braucht. `findAllProjectByVorname` zeigt,
+> dass sich diese Projektion sogar mit der Methodennamen-Konvention
+> kombinieren laesst. Beides ist Stoff fuer ein Folgeseminar.
+
+#### 3.7 Zusammenfassung und weiterfuehrende Referenz
+
+1. `@Entity` bildet eine Java-Klasse auf eine Datenbanktabelle ab.
+2. Ein Spring-Data-Repository ist nur ein **Interface** - die
+   Implementierung erzeugt der Container zur Laufzeit automatisch
+   (Proxy-Prinzip aus Kapitel 1).
+3. `CrudRepository` liefert die Standard-Operationen (Speichern,
+   Lesen, Loeschen) ohne eine Zeile eigenen Codes.
+4. Einfache eigene Abfragen lassen sich ueber die **Methodennamen-
+   Konvention** (`findBy...`) erzeugen, ganz ohne SQL/JPQL.
+5. Alles darueber hinaus (eigene `@Query`s, Projektionen) ist bewusst
+   ausgeklammert.
+
+Wer sich vertiefen moechte, findet die vollstaendige Dokumentation in
+der offiziellen Spring-Data-JPA-Referenz:
+[docs.spring.io/spring-data/jpa/reference](https://docs.spring.io/spring-data/jpa/reference/)
+
+Wir haben jetzt zwei der drei "Personen"-Klassen im Projekt gesehen:
+`PersonDto` (Presentation, Tag 1) und `PersonEntity` (Persistence,
+gerade eben). Die dritte ist `Person` im Package `service.model` -
+das **Domain-Modell**, mit dem wir Tag 2 abschliessen.
+
+#### 3.8 Domain Layer: `Person` als fachliches Modell
+
+Datei: `WebApp/src/main/java/de/fi/webapp/service/model/Person.java`
+
+```java
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Person {
+
+    private UUID id;
+    private String vorname;
+    private String nachname;
+}
+```
+
+Auffaellig: `Person` traegt **keine** JPA-Annotationen (kein
+`@Entity`) und **keine** Bean-Validation-Annotationen (kein
+`@NotNull`/`@Size`). Es ist ein reines Java-Objekt ohne jede
+Abhaengigkeit zu einem Framework - nur Lombok bleibt, um Getter/
+Setter/Builder nicht von Hand schreiben zu muessen (Kapitel 2).
+
+Warum drei fast identisch aussehende Klassen (`PersonDto`,
+`PersonEntity`, `Person`) fuer dasselbe fachliche Ding? Jede Schicht
+hat ihre eigene, nur fuer sie relevante Sicht:
+
+- `PersonDto` (Presentation) - wie sieht die Person "auf der
+  Leitung" (HTTP/JSON) aus, inkl. Regeln, die nur beim Entgegennehmen
+  von Aussen zaehlen (Bean Validation).
+- `PersonEntity` (Persistence) - wie liegt die Person in der
+  Datenbank (Tabellen-/Spaltenabbildung).
+- `Person` (Domain) - was IST eine Person fachlich, unabhaengig
+  davon, ob sie gerade per HTTP hereinkommt oder aus der Datenbank
+  gelesen wird.
+
+Der Service-Layer (Tag 3) arbeitet ausschliesslich mit `Person` - er
+kennt weder `PersonDto` noch `PersonEntity`. Die Umwandlung zwischen
+den Schichten uebernehmen eigene Mapper (`PersonDtoMapper` an der
+Controller-Grenze, `PersonMapper` an der Repository-Grenze).
+
+#### 3.9 Exkurs: Die Mapper - MapStruct statt Hand-Code
+
+Dateien: `WebApp/src/main/java/de/fi/webapp/service/mapper/PersonMapper.java`,
+`WebApp/src/main/java/de/fi/webapp/presentation/mapper/PersonDtoMapper.java`
+
+```java
+@Mapper(componentModel = "spring")
+public interface PersonMapper {
+    Person convert(PersonEntity personEntity);
+    PersonEntity convert(Person person);
+    Iterable<Person> convert(Iterable<PersonEntity> personEntity);
+}
+```
+
+Auch hier wieder nur ein **Interface**, keine Implementierung im
+Projekt - genau wie bei `PersonenRepository` (3.5). Trotzdem laesst
+sich `PersonMapper` per Konstruktor injizieren. Der Unterschied zu
+Spring Data: Hier entsteht die Implementierung NICHT zur Laufzeit per
+Proxy, sondern beim **Kompilieren** - `mapstruct-processor` (siehe
+`pom.xml`, Abschnitt `annotationProcessorPaths`) generiert eine
+echte Klasse `PersonMapperImpl` mit stinknormalem, lesbarem Java-Code
+(Feld fuer Feld kopiert), die als `@Component` registriert wird. Wer
+neugierig ist, findet diese generierte Klasse nach dem Build unter
+`target/generated-sources/annotations/`.
+
+> **Merksatz:** Zwei Frameworks, zwei Automatisierungs-Strategien,
+> dasselbe Ziel (kein Boilerplate von Hand schreiben): Spring Data
+> (3.5) erzeugt die Implementierung **zur Laufzeit** per dynamischem
+> Proxy (wie `LoggerProxy` in Kapitel 1). MapStruct erzeugt sie
+> **zur Kompilierzeit** per Annotation-Processor - kein Proxy, kein
+> Reflection-Overhead zur Laufzeit, dafuer generierter Code, der bei
+> jedem Build neu entsteht.
+
+---
+
+## Tag 3
+
+### Kapitel 3 (Fortsetzung): Der Service-/Business-Layer
+
+Den Domain Layer (`Person`) kennen wir bereits aus Tag 2 (siehe 3.8)
+- er ist die Grundlage der Schicht, die heute im Detail dran ist: der
+**Service-/Business-Layer**.
+
+#### 3.10 Der Service: Vertrag und fachliche Pruefung
+
+Datei: `WebApp/src/main/java/de/fi/webapp/service/PersonenService.java`
+
+```java
+public interface PersonenService {
+    void speichern(Person person) throws PersonenServiceException;
+    void aendern(Person person) throws PersonenServiceException;
+    void loeschen(UUID uuid) throws PersonenServiceException;
+    Optional<Person> findeNachId(UUID uuid) throws PersonenServiceException;
+    Iterable<Person> findeAlle() throws PersonenServiceException;
+}
+```
+
+Genau wie bei `Calculator` (Kapitel 1) oder `PersonenRepository` (Tag
+2) gilt: Der Controller kennt nur dieses Interface, nicht
+`PersonServiceImpl`. Der Service hat zwei Aufgaben, die weder
+Presentation noch Persistence uebernehmen sollen: **Validierung** und
+eine kleine **fachliche Pruefung**.
+
+Datei: `WebApp/src/main/java/de/fi/webapp/service/internal/PersonServiceImpl.java`,
+Methode `validieren`:
+
+```java
+private void validieren(final Person person) throws PersonenServiceException {
+    if (person == null) throw new PersonenServiceException("Person darf nicht null sein");
+    if (person.getVorname() == null || person.getVorname().length() < 2) throw new PersonenServiceException("Vorname zu kurz");
+    if (person.getNachname() == null || person.getNachname().length() < 2) throw new PersonenServiceException("Nachname zu kurz");
+    //if (blacklistService.isBlacklisted(person)) throw new PersonenServiceException("Antipath");
+    if(antipathen.contains(person.getVorname()) ) throw new PersonenServiceException("Antipath");
+}
+```
+
+Das sind technische Mindestanforderungen (nicht null, Mindestlaenge)
+- interessanter ist die letzte Zeile, die **fachliche** Regel: Steht
+der Vorname auf einer Liste unerwuenschter Personen ("Antipathen")?
+Anders als man es vielleicht erwarten wuerde, verwendet dieses
+Projekt bewusst **dieselbe** Exception (`PersonenServiceException`)
+fuer beide Faelle - fachlich waere eine eigene, sprechendere
+Exception denkbar, das Prinzip "fachliche Regeln gehoeren in den
+Service, nicht in Controller oder Persistence" gilt aber so oder so.
+
+#### 3.11 Die Transaktionsklammer: `@Transactional`
+
+```java
+@Service
+@RequiredArgsConstructor
+@Transactional(rollbackFor = PersonenServiceException.class, propagation = Propagation.REQUIRED, isolation = Isolation.READ_COMMITTED)
+public class PersonServiceImpl implements PersonenService {
+    ...
+}
+```
+
+`@Transactional` auf Klassenebene spannt um **jede** Methode dieses
+Service eine Transaktionsklammer - Spring startet die Transaktion
+beim Methodenaufruf und committet (oder rollt zurueck) beim Verlassen
+der Methode. Drei Parameter im Detail:
+
+- `propagation = Propagation.REQUIRED` (Standardwert, hier zur
+  Klarheit ausgeschrieben): Existiert bereits eine laufende
+  Transaktion, wird sie **wiederverwendet**; sonst wird eine neue
+  eroeffnet.
+- `isolation = Isolation.READ_COMMITTED`: legt fest, wie stark diese
+  Transaktion von gleichzeitig laufenden anderen Transaktionen
+  abgeschirmt ist (hier: nur bereits committete Aenderungen anderer
+  Transaktionen sind sichtbar).
+- `rollbackFor = PersonenServiceException.class`: **das ist der
+  eigentliche Lehrpunkt.** Spring rollt eine Transaktion
+  standardmaessig nur bei **ungeprueften** Exceptions
+  (`RuntimeException` und Unterklassen) automatisch zurueck - bei
+  **geprueften** (checked) Exceptions passiert das NICHT, ausser man
+  sagt es Spring explizit ueber `rollbackFor`.
+
+Genau deshalb ist `PersonenServiceException` bewusst eine **geprueft**
+Exception (`extends Exception`, nicht `RuntimeException`, siehe
+`service/exception/PersonenServiceException.java`) - nicht aus
+Zufall, sondern um im Kurs an einem konkreten Beispiel zu zeigen,
+dass geprueft Exceptions bei `@Transactional` explizit angegeben
+werden muessen, sonst wuerde z.B. ein fehlgeschlagenes
+`repo.save(...)` innerhalb von `speichern()` NICHT zu einem Rollback
+fuehren, obwohl die Methode selbst eine `PersonenServiceException`
+wirft.
+
+`@RequiredArgsConstructor` (Lombok, Kapitel 2) erzeugt den
+Konstruktor fuer die drei `final`-Felder `repo`, `mapper` und
+`antipathen` - Konstruktor-Injektion bleibt also auch hier das
+Prinzip, nur handschriftlich sparen wir uns den Code.
+
+#### 3.12 Ein Seitenblick auf SOLID: `BlacklistService`
+
+Konsequent zu Ende gedacht (SOLID, insbesondere Single Responsibility)
+gehoert eine Blacklist-Pruefung eigentlich gar nicht in
+`PersonServiceImpl`, sondern in einen eigenen, dafuer zustaendigen
+Service - im Projekt bereits als Interface angelegt:
+
+Datei: `WebApp/src/main/java/de/fi/webapp/service/BlacklistService.java`
+
+```java
+public interface BlacklistService {
+    boolean isBlacklisted(Person possibleBlacklistedPerson);
+}
+```
+
+"Richtig" waere an dieser Stelle Konstruktor-Injektion des
+`BlacklistService` - im Code bereits vorbereitet, aber auskommentiert:
+
+```java
+private final PersonenRepository repo;
+private final PersonMapper mapper;
+//private final BlacklistService blacklistService;
+
+@Qualifier("antipathen")
+private final List<String> antipathen;
+```
+
+Wir nutzen an dieser Stelle bewusst trotzdem (noch) keinen eigenen
+`BlacklistService`, sondern bleiben bei der einfachen `List<String>`
+- nicht aus fachlicher Ueberzeugung, sondern didaktisch: Eine
+`List<String>`, die von irgendwoher kommen muss, ist der ideale
+Anlass, um `@Configuration`/`@Bean` einzufuehren.
+
+#### 3.13 `@Configuration` und `@Bean`
+
+Datei: `WebApp/src/main/java/de/fi/webapp/service/config/PersonConfig.java`
+
+```java
+@Configuration
+public class PersonConfig {
+
+    @Bean
+    @Qualifier("antipathen")
+    public List<String> createAntipathen() {
+        return List.of("Attila", "Peter","Paul", "Mary");
+    }
+
+    @Bean
+    @Qualifier("fruits")
+    public List<String> createFruits() {
+        return List.of("Banana", "Cherry","Strawberry", "Raspberry");
+    }
+
+    /*@Bean
+    public PersonenService createPersonenService(final PersonenRepository repo, final PersonMapper mapper, @Qualifier("antipathen") final List<String> antipathen) {
+        return new PersonServiceImpl(repo,mapper, antipathen );
+    }*/
+}
+```
+
+`@Configuration` markiert eine Klasse als reine "technische" Quelle
+fuer Bean-Definitionen (keine eigene fachliche Aufgabe). Jede mit
+`@Bean` annotierte Methode darin ist eine kleine **Fabrik**: Der
+Rueckgabewert wird als Bean im Container registriert. `@Qualifier
+("antipathen")` vergibt einen Namen, damit `PersonServiceImpl` (3.12)
+per `@Qualifier("antipathen")` am Konstruktor-Parameter genau DIESE
+`List<String>`-Bean bekommt und nicht irgendeine andere.
+
+Warum reicht hier kein einfaches `@Component` wie bisher? **Man kann
+aus einer fremden Klasse keine eigene Komponente machen.**
+`List`/`List.of(...)` sind Klassen/Methoden der Java-Standardbibliothek
+- wir koennen dort kein `@Component` hinschreiben. `@Bean` ist der
+einzige Weg, so ein Objekt trotzdem unter Spring-Verwaltung zu
+stellen.
+
+`createFruits()` zeigt denselben Mechanismus ein zweites Mal, diesmal
+ohne fachlichen Bezug zu `Person` - rein, um zu demonstrieren, dass es
+in einer `@Configuration`-Klasse mehr als eine `@Bean`-Methode
+desselben Rueckgabetyps geben kann und `@Qualifier` genau dafuer
+noetig ist (Konfliktaufloesung, siehe Kapitel 2, 2.7): Ohne
+`@Qualifier` wuesste Spring bei der Injektion einer `List<String>`
+nicht, ob `antipathen` oder `fruits` gemeint ist.
+
+Randnotiz im Code: In `PersonConfig` findet sich auskommentiert sogar
+eine `@Bean`-Methode, die `PersonServiceImpl` selbst als Bean erzeugen
+wuerde - als Beleg, dass `@Bean` grundsaetzlich eine Alternative zu
+`@Service`/`@Component` waere. Wir bleiben aber bei `@Service` fuer
+den Service selbst.
+
+> **Noch offen:** Ein zweites Beispiel, das `@Bean` fuer eine
+> **komplexe** Erzeugung aus externen Werten zeigt (z.B. eine
+> YAML-Datei per `@PropertySource`/`@ConfigurationProperties`), gibt
+> es in diesem Projekt bisher nicht - moeglicher Kandidat fuer einen
+> der naechsten Termine.
+
+#### 3.14 Unit-Testing mit Mockito (Ausblick)
+
+Datei: `WebApp/src/test/java/de/fi/webapp/service/internal/PersonServiceImplTest.java`
+
+```java
+@ExtendWith(MockitoExtension.class)
+class PersonServiceImplTest {
+    @InjectMocks
+    private PersonServiceImpl objectUnderTest;
+
+    @Mock
+    private PersonenRepository personRepositoryMock;
+
+    @Mock
+    private PersonMapper mapperMock;
+}
+```
+
+Dieser Test startet **keinen** Spring-Container - kein
+`@SpringBootTest`, kein `ApplicationContext`. `@Mock` erzeugt fuer
+`PersonenRepository` und `PersonMapper` je ein Test-Double,
+`@InjectMocks` reicht diese Mocks per Konstruktor in `objectUnderTest`
+hinein - das funktioniert nur, **weil** `PersonServiceImpl` von
+Anfang an konsequent auf Konstruktor-Injektion gegen Interfaces
+gesetzt hat (Kapitel 1).
+
+Aktuell stehen hier nur die Mockito-Vorbereitungen, noch kein
+einziger `@Test`. **Uebung fuer die Teilnehmer:** Den ersten Test
+selbst schreiben, z.B. `speichern(null)` aufrufen und pruefen, dass
+eine `PersonenServiceException` mit der Nachricht "Person darf nicht
+null sein" geworfen wird (`assertThrows`). Ein Detail dabei bewusst
+mitdenken: `objectUnderTest` braucht ueber den Konstruktor auch noch
+die `antipathen`-Liste (3.13) - die ist hier bislang nicht gemockt.
+
+### Kapitel 3 (Fortsetzung): Fehlerbehandlung
+
+Jetzt sind alle Schichten bekannt (Presentation, Persistence, Domain,
+Service) - genau die Voraussetzung, um ueber Fehlerbehandlung zu
+sprechen: Jede Exception, die uns jetzt begegnet, koennen wir einer
+Schicht zuordnen, in der sie entsteht.
+
+#### 3.15 Der zentrale ErrorHandler (`@ControllerAdvice`)
+
+Datei: `WebApp/src/main/java/de/fi/webapp/presentation/errorhandler/ErrorHandler.java`
+
+```java
+@ControllerAdvice
+public class ErrorHandler extends ResponseEntityExceptionHandler {
+
+    @Override
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(final MethodArgumentNotValidException ex, final HttpHeaders headers, final HttpStatusCode status, final WebRequest request) {
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("timestamp", LocalDateTime.now());
+        List<String> errors = ex.getBindingResult()
+                .getFieldErrors()
+                .stream()
+                .map(x -> x.getField() + ":" + x.getDefaultMessage())
+                .collect(Collectors.toList());
+        body.put("errors", errors);
+
+        // WICHTIG !!!!!!
+        logger.error("Upps", ex);
+        return ResponseEntity.badRequest().body(body);
+    }
+    ...
+}
+```
+
+`@ControllerAdvice` ist selbst wieder nur eine Spezialisierung von
+`@Component` (Kapitel 2) - mit einer Besonderheit: Sie gilt nicht nur
+fuer einen Controller, sondern **querschnittlich fuer alle**
+`@RestController`-Beans der Anwendung. Genau wie `LoggerProxy`
+(Kapitel 1) ist das ein Werkzeug fuer Querschnittsthemen - nur
+diesmal speziell fuer Exceptions.
+
+`ResponseEntityExceptionHandler` ist eine von Spring mitgelieferte
+Basisklasse mit bereits fertigen Handlern fuer haeufige Spring-MVC-
+Faelle. `handleMethodArgumentNotValid` ueberschreiben wir gezielt: Sie
+feuert automatisch immer dann, wenn ein mit `@Valid` annotiertes
+`@RequestBody` die Bean-Validation nicht besteht (Tag 1, 3.3,
+`PersonDto`/`SchweinDto`) - der Controller-Code selbst sieht davon
+nichts.
+
+#### 3.16 Fachliche Exceptions auf Statuscodes abbilden
+
+```java
+@ExceptionHandler(PersonenServiceException.class)
+public ResponseEntity<Object> handlePersonenServiceException(PersonenServiceException ex, WebRequest request) {
+    ...
+    body.put("type", ex.getClass().getSimpleName());// Achtung security
+    logger.error("Upps", ex);
+    return ResponseEntity.internalServerError().body(body);
+}
+
+@ExceptionHandler(SchweineServiceException.class)
+public ResponseEntity<Object> handleSchweineServiceException(SchweineServiceException ex, WebRequest request) {
+    ...
+    body.put("type", ex.getClass().getSimpleName());// Achtung security
+    logger.error("Upps", ex);
+    return ResponseEntity.internalServerError().body(body);
+}
+
+@ExceptionHandler(AlreadyExistsException.class)
+public ResponseEntity<Object> handleAlreadyExistsException(AlreadyExistsException ex, WebRequest request) {
+    logger.error("Upps", ex);
+    return ResponseEntity.status(HttpStatus.CONFLICT).body(ex.getMessage());
+}
+
+@ExceptionHandler(NotFoundException.class)
+public ResponseEntity<Object> handleNotFoundException(NotFoundException ex, WebRequest request) {
+    logger.error("Upps", ex);
+    return ResponseEntity.notFound().build();
+}
+
+@ExceptionHandler(IdMismatchException.class)
+public ResponseEntity<Object> handleIdMismatchException(IdMismatchException ex, WebRequest request) {
+    logger.error("Upps", ex);
+    return ResponseEntity.badRequest().body(ex.getMessage());
+}
+```
+
+Ein `@ExceptionHandler(XyzException.class)` pro Exception-Typ, jeder
+mit einer bewussten Statuscode-Entscheidung. Jetzt, wo alle Schichten
+bekannt sind, laesst sich jede Zeile einer Herkunft zuordnen:
+
+- `IdMismatchException` - Presentation Layer (Tag 1,
+  `PersonenController`/`SchweinController`).
+- `NotFoundException`, `AlreadyExistsException`,
+  `PersonenServiceException`, `SchweineServiceException` - Service
+  Layer.
+
+Zwei Dinge lohnen eine kurze Diskussion mit den Teilnehmern:
+
+1. **`PersonenServiceException` ist eine geprueft Exception (3.11),
+   `SchweineServiceException` dagegen eine ungeprueft** (`extends
+   RuntimeException`, siehe
+   `service/exception/SchweineServiceException.java`) - fuer
+   `@ExceptionHandler` spielt das **keine Rolle**: Ob eine Exception
+   checked oder unchecked ist, ist Spring an dieser Stelle egal, es
+   zaehlt nur der Typ. Ein guter Kontrast zu 3.11, wo
+   checked/unchecked bei `@Transactional(rollbackFor = ...)` sehr
+   wohl entscheidend war - und ein guter Vorgriff auf die groessere
+   Uebung weiter unten: Warum koennte man sich bei `Schwein` bewusst
+   fuer eine ungeprueft Exception entschieden haben?
+2. **Der Kommentar `// Achtung security`** neben
+   `ex.getClass().getSimpleName()`: Den internen Exception-Typ (oder
+   gar `ex.getMessage()` mit technischen Details) ungefiltert an den
+   Client zurueckzugeben, kann intern Architektur preisgeben
+   (Information Disclosure). Serverseitig wird trotzdem **immer**
+   geloggt (`logger.error("Upps", ex)`) - das Prinzip: intern alles
+   protokollieren, nach aussen nur das Noetigste zeigen.
+
+> **Diskussionsfrage:** Ein generischer `Exception.class`-Handler als
+> letztes Sicherheitsnetz fehlt in diesem `ErrorHandler` bislang. Was
+> passiert aktuell bei einer Exception, die keiner dieser fuenf
+> Klassen entspricht (z.B. eine unerwartete `NullPointerException`)?
+> Ueberlegt euch, ob ein solcher Auffang-Handler ergaenzt werden
+> sollte, und was er zurueckgeben muesste, um niemals einen nackten
+> Stacktrace an den Client durchzulassen.
+
+### Groessere Uebung: Alle drei Schichten selbst bauen - `Schwein`
+
+Jetzt, wo Persistence, Domain, Service und Fehlerbehandlung komplett
+an `Person` durchgespielt sind, wenden die Teilnehmer alles selbst
+an: Persistence, Service und REST-Endpoint fuer eine neue Ressource -
+`Schwein` - komplett selbst bauen, inklusive der Mapper dazwischen.
+
+#### Aufgabenstellung
+
+Baut fuer `Schwein` denselben Dreiklang, den wir an `Person` bereits
+kennengelernt haben - in der Reihenfolge, in der man eine neue
+Ressource in der Praxis typischerweise tatsaechlich **baut** (nicht
+in der Reihenfolge, in der wir sie bisher **erklaert** haben):
+
+1. **Persistence Layer**: `SchweinEntity` (`@Entity`, `@Id`,
+   `@Column`) + `SchweinRepository` (`CrudRepository<SchweinEntity, UUID>`).
+2. **Mapper** zwischen Entity und Domain-Modell (MapStruct, siehe
+   Tag 2, 3.9).
+3. **Domain Layer**: `Schwein` - mit einer wichtigen
+   Zusatzanforderung, siehe unten.
+4. **Service Layer**: `SchweineService` (Interface) +
+   `SchweineServiceImpl` - CRUD wie bei `PersonenService`, plus eine
+   fachliche Aktion: **Fuettern**. Jede Fuetterung erhoeht das
+   Gewicht des Schweins.
+5. **Mapper** zwischen Domain-Modell und DTO.
+6. **Presentation Layer**: `SchweinDto` + `SchweinController` -
+   CRUD-Endpoints nach denselben Ressourcen-Naming-Regeln wie
+   `PersonenController` (Tag 1, 3.1), plus ein Endpoint fuers
+   Fuettern.
+7. **Fehlerbehandlung erweitern** (3.15/3.16): `SchweineServiceException`
+   braucht einen eigenen `@ExceptionHandler`.
+
+**Wichtige Zusatzanforderung an den Domain Layer:** `Person` war
+bisher ein reines **Anemic Domain Model** (Martin Fowler) - nur
+Felder, Getter, sonst keinerlei Verhalten. Jede Regel steckte im
+Service (`validieren`). `Schwein` soll das NICHT sein: Die Regel
+"Fuettern erhoeht das Gewicht" gehoert auf das Domain-Objekt selbst
+(z.B. eine Methode `schwein.fuettern()`), nicht als
+`schwein.setGewicht(schwein.getGewicht() + 1)` im Service. Der
+Service ruft nur noch `schwein.fuettern()` auf - er orchestriert
+(laden, Methode aufrufen, speichern), er rechnet nicht mehr selbst.
+
+**Zum Fuettern-Endpoint:** Ueberlegt euch, wie sich "Fuettern" mit
+den Ressourcen-Naming-Regeln aus Tag 1 vertraegt - es ist offensichtlich
+keine der vier Standard-Operationen (Lesen/Anlegen/Aendern/Loeschen)
+auf `/v1/schweine/{id}`. Ein Endpoint wie `/v1/schweine/{id}/fuettern`
+waere ein Verb in der URL und wuerde gegen die Regel "Ressourcen sind
+Nomen" verstossen (siehe [restfulapi.net](https://restfulapi.net/resource-naming/)).
+Die gaengige Alternative: Man modelliert die Aktion selbst als
+(Unter-)Ressource - eine Fuetterung ist ein Ereignis, das man
+**anlegt**: `POST /v1/schweine/{id}/fuetterungen`.
+
+#### Diskussion: In welcher Reihenfolge wuerdet ihr die Klassen bauen?
+
+Bevor es losgeht, lohnt sich ein kurzes Gespraech mit den
+Teilnehmern - es gibt nicht DIE eine richtige Reihenfolge, aber gute
+Argumente fuer verschiedene:
+
+- **Bottom-up, von der Persistence aus** (wie oben vorgeschlagen):
+  Man beginnt beim "Fundament". Jede weitere Schicht hat sofort etwas
+  Konkretes, an das sie andocken kann; man kann fruehzeitig gegen
+  eine echte (H2-)Datenbank testen. Nachteil: Das API-Design laeuft
+  Gefahr, sich zu sehr an der Datenbankstruktur zu orientieren.
+- **Top-down / outside-in, vom Controller aus** (Contract-first):
+  Man beginnt bei der Frage "Was braucht der Client?" und arbeitet
+  sich nach innen vor, zunaechst mit Stubs/Mocks fuer Service und
+  Repository. Vorteil: Das API-Design bleibt am Bedarf orientiert.
+  Nachteil: Ohne Stubs ist der Code zwischenzeitlich nicht
+  compilierbar/lauffaehig.
+- **Middle-out, vom Domain-Modell aus**: Man beginnt beim fachlichen
+  Kern (`Schwein` inkl. `fuettern()`), ganz ohne Spring, JPA oder
+  HTTP - reines Java, isoliert testbar. Danach werden Persistence und
+  Presentation als "Adapter" drumherum gebaut. Das ist der
+  Kerngedanke hinter Onion-/Hexagonal-Architektur, die wir in diesem
+  Kurs bewusst nicht vertiefen - hier reicht der Hinweis, dass diese
+  Uebung zeigt, WARUM man so etwas machen wuerde.
+
+Jede dieser Reihenfolgen ist vertretbar - wichtig ist, dass die
+Teilnehmer eine bewusste Entscheidung treffen und begruenden koennen.
+
+#### Musterloesung im Projekt
+
+Die fertige Loesung liegt bereits im Projekt (Package `de.fi.webapp`,
+jeweils mit `Person`-Pendant zum Vergleich):
+
+| Schicht | Datei |
+|---|---|
+| Entity | `persistence/entity/SchweinEntity.java` |
+| Repository | `persistence/repository/SchweinRepository.java` |
+| Mapper (Entity <-> Domain) | `service/mapper/SchweinMapper.java` |
+| Domain-Modell | `service/model/Schwein.java` |
+| Service-Interface | `service/SchweineService.java` |
+| Service-Implementierung | `service/internal/SchweineServiceImpl.java` |
+| Mapper (Domain <-> DTO) | `presentation/mapper/SchweinDtoMapper.java` |
+| DTO | `presentation/dto/SchweinDto.java` |
+| Controller | `presentation/controller/v1/SchweinController.java` |
+| Fehlerbehandlung | `presentation/errorhandler/ErrorHandler.java` |
+
+Der entscheidende Ausschnitt - das nicht-anaemische Domain-Modell:
+
+```java
+// service/model/Schwein.java
+@Data
+@Setter(AccessLevel.PRIVATE)
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Schwein {
+
+    private UUID id;
+    private String name;
+    private int gewicht;
+
+    public void fuettern() {
+        setGewicht(getGewicht()  + 1);
+    }
+}
+```
+
+Ein Lombok-Detail, das sich lohnt zu zeigen: `@Setter(AccessLevel.PRIVATE)`
+ueberschreibt gezielt, was `@Data` normalerweise erzeugen wuerde
+(oeffentliche Setter fuer alle Felder) - hier wird `setGewicht(...)`
+bewusst `private` gemacht. Von aussen (auch vom Service!) laesst sich
+`gewicht` dadurch NICHT mehr direkt setzen, nur noch ueber
+`fuettern()`. Das ist Kapselung im eigentlichen Sinne und macht ein
+nicht-anaemisches Domain-Modell erst wirklich wasserdicht - ohne
+diesen Kniff koennte jeder Aufrufer die fachliche Regel trotzdem per
+`setGewicht(...)` umgehen.
+
+```java
+// service/internal/SchweineServiceImpl.java
+@Override
+public void fuettern(final UUID uuid) {
+    try {
+        Schwein schwein = repo.findById(uuid)
+                .map(mapper::convert)
+                .orElseThrow(() -> new NotFoundException("Schwein konnte nicht gefunden werden"));
+        schwein.fuettern();
+        repo.save(mapper.convert(schwein));
+    } catch (NotFoundException e) {
+        throw e;
+    } catch (RuntimeException e) {
+        throw new SchweineServiceException("Fehler beim Fuettern", e);
+    }
+}
+```
+
+Der Service laedt, ruft die fachliche Methode auf dem Domain-Objekt
+auf und speichert - die Berechnung selbst ("wie veraendert sich das
+Gewicht beim Fuettern?") steht nirgendwo im Service, sondern
+ausschliesslich in `Schwein.fuettern()`. Das ist der Unterschied
+zwischen einem anaemischen und einem nicht-anaemischen Domain-Modell
+in einem Satz.
+
+Zwei weitere Vergleichspunkte zu `Person` lohnen sich direkt am Code:
+
+- `SchweineServiceException` ist bewusst als **ungeprueft** Exception
+  angelegt (`extends RuntimeException`) - im Unterschied zu
+  `PersonenServiceException` (3.11). `SchweineService` deklariert
+  dementsprechend auch kein `throws` an seinen Methoden.
+- Genau deshalb reicht `SchweineServiceImpl` ein blankes
+  `@Transactional` (Standard-Rollback bei jeder `RuntimeException`
+  greift automatisch), waehrend `PersonServiceImpl` explizit
+  `@Transactional(rollbackFor = PersonenServiceException.class)`
+  braucht (3.11) - der Lehrpunkt aus 3.11 laesst sich damit 1:1 am
+  eigenen Code der beiden Services nachvollziehen.
+
+Und die Ergaenzung im `ErrorHandler` (Punkt 7 der Aufgabenstellung,
+bereits umgesetzt, siehe 3.16):
+
+```java
+@ExceptionHandler(SchweineServiceException.class)
+public ResponseEntity<Object> handleSchweineServiceException(SchweineServiceException ex, WebRequest request) {
+    ...
+    logger.error("Upps", ex);
+    return ResponseEntity.internalServerError().body(body);
+}
+```
+
+### Noch offen
+
+Bewusst zurueckgestellt, Themen fuer einen der naechsten Termine:
+
+- **Aspekte (AOP)** (`@Aspect`, `Pointcuts`, `@Before`/
+  `@AfterReturning`/`@AfterThrowing`/`@After`/`@Around`) - der
+  produktive Nachfolger von `LoggerProxy` (Kapitel 1) und dem
+  Proxy-Prinzip hinter Spring Data (Tag 2, 3.5); im Projekt noch
+  nicht angelegt.
+- **REST-Endpoints gegen den laufenden Container testen**
+  (`@SpringBootTest(webEnvironment = RANDOM_PORT)`,
+  `TestRestTemplate`, `@MockitoBean`) im Kontrast zum reinen
+  Mockito-Test (3.14) - aktuell existiert nur der triviale
+  `WebAppApplicationTests.contextLoads()`-Test.
+- Der erste eigene `@Test` in `PersonServiceImplTest` (siehe 3.14).
+- **Zweites `@Bean`-Beispiel fuer komplexe Erzeugung aus externen
+  Werten** (z.B. YAML via `@PropertySource`/`@ConfigurationProperties`,
+  siehe 3.13).
+- **Komplexe Abfragen** (`@Query`, Projektionen ueber `TinyPerson`,
+  siehe Tag 2, 3.6) im Detail.
+- `OtherRunner` (`@Order`) und `Person.java` (Lombok) aus Kapitel 2 -
+  weiterhin vorbereitet, noch nicht im Detail behandelt.
+- **Events** (`ApplicationEventPublisher`) - nur, falls noch Zeit
+  bleibt.
+- **Swagger/OpenAPI im Detail** (`@Operation`/`@ApiResponses`,
+  bisher nur am Rande in Tag 1 erwaehnt).

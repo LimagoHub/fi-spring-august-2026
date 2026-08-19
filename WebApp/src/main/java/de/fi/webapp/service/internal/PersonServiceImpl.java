@@ -1,11 +1,15 @@
 package de.fi.webapp.service.internal;
 
 import de.fi.webapp.persistence.repository.PersonenRepository;
+import de.fi.webapp.service.BlacklistService;
 import de.fi.webapp.service.PersonenService;
+import de.fi.webapp.service.exception.AlreadyExistsException;
+import de.fi.webapp.service.exception.NotFoundException;
 import de.fi.webapp.service.exception.PersonenServiceException;
 import de.fi.webapp.service.mapper.PersonMapper;
 import de.fi.webapp.service.model.Person;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
@@ -22,6 +26,10 @@ public class PersonServiceImpl implements PersonenService {
 
     private final PersonenRepository repo;
     private final PersonMapper mapper;
+    //private final BlacklistService blacklistService;
+
+    @Qualifier("antipathen")
+    private final List<String> antipathen;
 
     /*
         person ist null -> PSE
@@ -33,35 +41,29 @@ public class PersonServiceImpl implements PersonenService {
         Happy Day wird person an repo uebergeben
 
      */
-    public void bulkInsert(List<Person> personen) throws PersonenServiceException{
-        for (Person person : personen) {
-            speichern(person);
-        }
-    }
 
 
     @Override
     public void speichern(Person person) throws PersonenServiceException {
         try {
-            if (person == null) throw new PersonenServiceException("Person darf nicht null sein");
-            if (person.getVorname() == null ||person.getVorname().length()< 2) throw new PersonenServiceException("Vorname zu kurz");
-            if (person.getNachname() == null ||person.getNachname().length()< 2) throw new PersonenServiceException("Nachname zu kurz");
-            if (person.getVorname().equals("Attila")) throw new PersonenServiceException("Antipath");
+            validieren(person);
+            if (repo.existsById(person.getId())) throw new AlreadyExistsException("Datensatz existiert bereits");
             repo.save(mapper.convert(person));
+        } catch (AlreadyExistsException e) {
+            throw e;
         } catch (RuntimeException e) {
             throw new PersonenServiceException("Fehler beim Speichern",  e);
         }
-
     }
 
     @Override
     public void aendern(final Person person) throws PersonenServiceException {
         try {
-            if (person == null) throw new PersonenServiceException("Person darf nicht null sein");
-            if (person.getVorname() == null ||person.getVorname().length()< 2) throw new PersonenServiceException("Vorname zu kurz");
-            if (person.getNachname() == null ||person.getNachname().length()< 2) throw new PersonenServiceException("Nachname zu kurz");
-            if (person.getVorname().equals("Attila")) throw new PersonenServiceException("Antipath");
+            validieren(person);
+            if (! repo.existsById(person.getId())) throw new NotFoundException("Datensatz konnte nicht gefunden werden");
             repo.save(mapper.convert(person));
+        } catch (NotFoundException e) {
+            throw e;
         } catch (RuntimeException e) {
             throw new PersonenServiceException("Fehler beim Aendern",  e);
         }
@@ -70,11 +72,21 @@ public class PersonServiceImpl implements PersonenService {
     @Override
     public void loeschen(final UUID uuid) throws PersonenServiceException {
         try {
-
+            if (! repo.existsById(uuid)) throw new NotFoundException("Datensatz konnte nicht gefunden werden");
             repo.deleteById(uuid);
+        } catch (NotFoundException e) {
+            throw e;
         } catch (RuntimeException e) {
             throw new PersonenServiceException("Fehler beim Loeschen",  e);
         }
+    }
+
+    private void validieren(final Person person) throws PersonenServiceException {
+        if (person == null) throw new PersonenServiceException("Person darf nicht null sein");
+        if (person.getVorname() == null || person.getVorname().length() < 2) throw new PersonenServiceException("Vorname zu kurz");
+        if (person.getNachname() == null || person.getNachname().length() < 2) throw new PersonenServiceException("Nachname zu kurz");
+        //if (blacklistService.isBlacklisted(person)) throw new PersonenServiceException("Antipath");
+        if(antipathen.contains(person.getVorname()) ) throw new PersonenServiceException("Antipath");
     }
 
     @Transactional(rollbackFor = PersonenServiceException.class, isolation = Isolation.READ_UNCOMMITTED)
