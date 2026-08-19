@@ -7,6 +7,8 @@ import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.*;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.logging.Logger;
 
 @Component
@@ -16,11 +18,14 @@ public class MyAspect {
 
     //private static Logger logger = Logger.getLogger(MyAspect.class.getName());
 
-    @Before("execution(public * de.fi.webapp.presentation.controller.v1.PersonenController.*(..))")
+
+
+
+    @Before("Pointcuts.PersonControllerMethodes()")
     public void beforeAdvice(JoinPoint joinPoint) {
         log.warn(String.format("######## beforeAdvice Methode  %s wurde gerufen!  #########", joinPoint.getSignature().getName()));
     }
-    @AfterReturning(value = "execution(public * de.fi.webapp.presentation.controller.v1.PersonenController.*(..))", returning ="result")
+    @AfterReturning(value = "Pointcuts.PersonControllerMethodes()", returning ="result")
     public void afterReturningAdvice(JoinPoint joinPoint, Object result) {
         log.warn((String.format("############################# Afterreturning: %s ######################", joinPoint.getSignature().getName())));
         log.warn(String.format("############################# Result: %s ######################", result.toString()));
@@ -39,7 +44,11 @@ public class MyAspect {
     }
     @Around(value="execution(public * de.fi.webapp.presentation.controller.v1.PersonenController.*(..))")
     public Object around(ProceedingJoinPoint joinPoint) throws Throwable {
-        log.warn(String.format("############################# Around: %s ######################", joinPoint.getSignature().getName()));
-        return joinPoint.proceed();
+        Instant start = Instant.now();
+        Object result = joinPoint.proceed();
+        Instant end = Instant.now();
+        var duration = Duration.between(start, end).toMillis();
+        System.out.println("############################# Duration: " + duration);
+        return result;
     }
 }

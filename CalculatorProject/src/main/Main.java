@@ -7,9 +7,20 @@ import math.CalculatorImpl;
 import math.CalculatorLogger;
 import math.CalculatorSecure;
 
+import java.time.Duration;
+import java.time.Instant;
+
 public class Main {
 
     public static void main(String[] args) {
+
+        Instant start = Instant.now();
+        //
+        Instant end = Instant.now();
+        var duration = Duration.between(start, end);
+        System.out.println(duration.toMillis());
+
+
         Calculator calc = new CalculatorImpl();
 
         //calc = new CalculatorLogger(calc);
