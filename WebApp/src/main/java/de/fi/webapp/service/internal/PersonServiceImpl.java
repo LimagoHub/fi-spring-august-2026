@@ -51,7 +51,7 @@ public class PersonServiceImpl implements PersonenService {
         try {
             validieren(person);
             if (repo.existsById(person.getId())) throw new AlreadyExistsException("Datensatz existiert bereits");
-            repo.save(mapper.convert(person));
+            repo.onlySave(      mapper.convert(person));
             applicationEventPublisher.publishEvent(new PersonCreatedEvent(person.getId(), person.getVorname(), person.getNachname()));
         } catch (AlreadyExistsException e) {
             throw e;

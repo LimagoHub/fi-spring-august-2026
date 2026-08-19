@@ -934,13 +934,13 @@ Detail anfassen: **Namenskonvention statt SQL/JPQL.** Die beiden
 anderen Methoden im selben Interface stehen zwar schon da, zeigen
 aber bereits komplexeres Terrain:
 
-> **Bewusst nicht vertieft heute:** `egal()` nutzt eigenes JPQL
-> (`@Query(...)`), das direkt ein `TinyPerson`-Projektions-Objekt
-> erzeugt (ein `record` mit nur `id`/`nachname`, siehe
-> `persistence/entity/TinyPerson.java`) - nuetzlich, wenn man nicht
-> alle Spalten einer Entity braucht. `findAllProjectByVorname` zeigt,
-> dass sich diese Projektion sogar mit der Methodennamen-Konvention
-> kombinieren laesst. Beides ist Stoff fuer ein Folgeseminar.
+> **Heute nur kurz angerissen, Details folgen in 3.19:** `egal()`
+> nutzt eigenes JPQL (`@Query(...)`), das direkt ein
+> `TinyPerson`-Projektions-Objekt erzeugt (ein `record` mit nur
+> `id`/`nachname`, siehe `persistence/entity/TinyPerson.java`) -
+> nuetzlich, wenn man nicht alle Spalten einer Entity braucht.
+> `findAllProjectByVorname` zeigt, dass sich diese Projektion sogar
+> mit der Methodennamen-Konvention kombinieren laesst.
 
 #### 3.7 Zusammenfassung und weiterfuehrende Referenz
 
@@ -1246,24 +1246,41 @@ class PersonServiceImplTest {
 
     @Mock
     private PersonMapper mapperMock;
+
+    @Mock
+    private List<String> antipathenMock;
+
+    @Test
+    void speichern__person_is_null__PersoneServiceExceotionIsThrown() {
+        final PersonenServiceException ex = assertThrows(PersonenServiceException.class, ()->objectUnderTest.speichern(null));
+        assertEquals("Person darf nicht null sein", ex.getMessage());
+    }
 }
 ```
 
 Dieser Test startet **keinen** Spring-Container - kein
 `@SpringBootTest`, kein `ApplicationContext`. `@Mock` erzeugt fuer
-`PersonenRepository` und `PersonMapper` je ein Test-Double,
-`@InjectMocks` reicht diese Mocks per Konstruktor in `objectUnderTest`
-hinein - das funktioniert nur, **weil** `PersonServiceImpl` von
-Anfang an konsequent auf Konstruktor-Injektion gegen Interfaces
-gesetzt hat (Kapitel 1).
+`PersonenRepository`, `PersonMapper` und die `antipathen`-Liste (3.13)
+je ein Test-Double, `@InjectMocks` reicht diese Mocks per Konstruktor
+in `objectUnderTest` hinein - das funktioniert nur, **weil**
+`PersonServiceImpl` von Anfang an konsequent auf Konstruktor-Injektion
+gegen Interfaces gesetzt hat (Kapitel 1).
 
-Aktuell stehen hier nur die Mockito-Vorbereitungen, noch kein
-einziger `@Test`. **Uebung fuer die Teilnehmer:** Den ersten Test
-selbst schreiben, z.B. `speichern(null)` aufrufen und pruefen, dass
-eine `PersonenServiceException` mit der Nachricht "Person darf nicht
-null sein" geworfen wird (`assertThrows`). Ein Detail dabei bewusst
-mitdenken: `objectUnderTest` braucht ueber den Konstruktor auch noch
-die `antipathen`-Liste (3.13) - die ist hier bislang nicht gemockt.
+Der erste Test prueft genau den ersten `if`-Zweig aus `validieren`
+(3.10): `speichern(null)` muss eine `PersonenServiceException` mit der
+Nachricht "Person darf nicht null sein" werfen. Auffaellig im
+Methodennamen: Statt `@DisplayName` (eine Alternative, um einen Test
+lesbar zu benennen) steht hier die ganze Beschreibung direkt im
+Methodennamen selbst, per Konvention mit doppeltem Unterstrich
+getrennt (`<Methode>__<Szenario>__<Erwartung>`) - beide Wege fuehren
+zum selben Ziel: ein Testbericht, der auch ohne Blick in den Code
+verstaendlich ist.
+
+**Weitere Uebung fuer die Teilnehmer:** Analoge Tests fuer die
+uebrigen `if`-Zweige aus `validieren` ergaenzen (zu kurzer Vorname,
+zu kurzer Nachname, Vorname auf der Antipathen-Liste), sowie einen
+Happy-Path-Test, der `personRepositoryMock`/`mapperMock` gezielt per
+`when(...)` programmiert.
 
 ### Kapitel 3 (Fortsetzung): Fehlerbehandlung
 
@@ -1571,6 +1588,322 @@ public ResponseEntity<Object> handleSchweineServiceException(SchweineServiceExce
 }
 ```
 
+### Kapitel 3 (Fortsetzung): REST-Endpoints gegen den laufenden Container testen
+
+#### 3.17 Vom Unit-Test zum Test mit echtem HTTP
+
+Datei: `WebApp/src/test/java/de/fi/webapp/presentation/controller/v1/PersonenControllerTest.java`
+
+```java
+@ActiveProfiles("test")
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureTestRestTemplate
+@ExtendWith(SpringExtension.class)
+@Sql({"/create.sql", "/insert.sql"})
+class PersonenControllerTest {
+
+    @Autowired
+    private TestRestTemplate restTemplate;
+
+    @MockitoBean
+    private PersonenService personenServiceMock;
+
+    @Test
+    void findByTest() throws PersonenServiceException {
+        final var optionalPerson = Optional.of(new Person(UUID.fromString("b2e24e74-8686-43ea-baff-d9396b4202e0"),"John","Doe"));
+
+        when(personenServiceMock.findeNachId(any())).thenReturn(optionalPerson);
+
+        var personDto = restTemplate.getForObject("/v1/personen/b2e24e74-8686-43ea-baff-d9396b4202e0", PersonDto.class);
+        assertEquals("John", personDto.getVorname());
+        verify(personenServiceMock, times(1)).findeNachId(UUID.fromString("b2e24e74-8686-43ea-baff-d9396b4202e0"));
+    }
+
+    @Test
+    void test4() throws PersonenServiceException {
+        final Optional<Person> optionalPerson = Optional.empty();
+        when(personenServiceMock.findeNachId(any())).thenReturn(optionalPerson);
+
+        var entity = restTemplate.getForEntity("/v1/personen/b2e24e74-8686-43ea-baff-d9396b4202e0", PersonDto.class);
+        assertEquals(HttpStatus.NOT_FOUND, entity.getStatusCode());
+    }
+
+    @Test
+    void test5() throws PersonenServiceException {
+        var personen = List.of(
+                new Person(UUID.randomUUID(),"John","Doe"),
+                new Person(UUID.randomUUID(),"Jane","Doe"));
+        when(personenServiceMock.findeAlle()).thenReturn(personen);
+
+        var entity = restTemplate.exchange("/v1/personen", HttpMethod.GET, null, new ParameterizedTypeReference<List<PersonDto>>() { });
+
+        var liste = entity.getBody();
+        assertEquals(2, liste.size());
+    }
+}
+```
+
+Im Unterschied zu 3.14 (reiner Mockito-Unit-Test von
+`PersonServiceImpl`, **kein** Spring involviert) startet
+`@SpringBootTest(webEnvironment = RANDOM_PORT)` diesmal den
+**vollstaendigen** Spring-Container inklusive eingebettetem Server auf
+einem freien Port - echtes HTTP, echtes Spring MVC-Routing, echte
+JSON-(De)Serialisierung.
+
+- `TestRestTemplate` ist ein von Spring Boot bereitgestellter
+  HTTP-Client fuer Tests, der Port und Basis-URL des gestarteten
+  Containers automatisch kennt. **Versionsdetail:** In der hier
+  verwendeten Spring-Boot-Version (4.1, siehe `pom.xml`) reicht
+  `@SpringBootTest(webEnvironment = RANDOM_PORT)` allein nicht mehr,
+  um `TestRestTemplate` als Bean bereitzustellen - dafuer braucht es
+  zusaetzlich `@AutoConfigureTestRestTemplate` (aus dem neuen Package
+  `org.springframework.boot.resttestclient`). Ein gutes Beispiel
+  dafuer, dass sich auch "Boilerplate-Wegautomatisierung" zwischen
+  Framework-Versionen verschieben kann.
+- `@MockitoBean` (statt `@Mock`/`@InjectMocks` wie in 3.14) ersetzt
+  eine **echte Bean im laufenden ApplicationContext** durch ein
+  Mockito-Mock - hier `PersonenService`. Der Controller ist echt, nur
+  der Service dahinter wird ausgetauscht. Damit wird gezielt nur die
+  **Presentation-Schicht** getestet (Routing, Statuscodes,
+  (De-)Serialisierung), ohne echte Business-Logik oder Datenbank.
+- `@ActiveProfiles("test")` aktiviert beim Hochfahren das Profil
+  `test` (`application-test.properties`, siehe Tag 2) - eigene,
+  isolierte Test-Konfiguration mit H2-In-Memory-Datenbank.
+- `@Sql({"/create.sql", "/insert.sql"})` laedt vor der Testklasse
+  echte Testdaten in diese H2-Datenbank (`src/test/resources/`).
+- `test4` zeigt schoen den Bogen zurueck zu Tag 1 (3.1/3.3):
+  `ResponseEntity.of(Optional)` liefert bei einem leeren `Optional`
+  automatisch `404 Not Found` - genau das laesst sich hier ueber
+  einen echten HTTP-Request end-to-end nachweisen.
+- `test5` ruft `restTemplate.exchange(...)` mit `null` als
+  Request-Body auf - fuer `GET` braucht es keinen Body, anders als
+  bei `POST`/`PUT`.
+
+> **Zwei Testebenen, zwei Fragen:** 3.14 beantwortet "Stimmt meine
+> Business-Logik?" (ganz ohne Spring, sehr schnell). Dieser Abschnitt
+> beantwortet "Kommt bei einem echten HTTP-Request wirklich das
+> richtige JSON mit dem richtigen Statuscode heraus?" (mit Spring und
+> echtem Server, dafuer langsamer). Beide Ebenen ergaenzen sich, keine
+> ersetzt die andere.
+
+> **Diskussionsfrage:** `@Sql({"/create.sql", "/insert.sql"})` laedt
+> hier echte Testdaten - obwohl `personenServiceMock` den kompletten
+> Service (und damit auch jeden Datenbankzugriff) ersetzt. Braucht
+> dieser Test die geladenen Daten ueberhaupt? Was wuerde sich aendern,
+> wenn man `PersonenService` NICHT mocken, sondern echt gegen die
+> H2-Datenbank laufen lassen wuerde?
+
+### Kapitel 3 (Fortsetzung): Events
+
+#### 3.18 Lose Kopplung durch Publish/Subscribe: `ApplicationEventPublisher`
+
+Bisher hat jede Schicht ihre Nachbarschicht direkt gerufen: Controller
+ruft Service, Service ruft Repository. Ein Event dreht dieses Prinzip
+um: `PersonServiceImpl` **meldet** nur, dass etwas passiert ist - ohne
+zu wissen (oder wissen zu wollen), wer diese Meldung interessiert und
+was daraufhin passiert.
+
+Datei: `WebApp/src/main/java/de/fi/webapp/event/PersonCreatedEvent.java`
+
+```java
+public record PersonCreatedEvent(UUID id, String vorname, String nachname) {
+}
+```
+
+Ein Event ist hier nur ein einfaches, unveraenderliches Datenobjekt
+(`record`) - anders als in aelteren Spring-Versionen muss es dafuer
+NICHT von `ApplicationEvent` erben. Seit Spring 4.2 akzeptiert
+`ApplicationEventPublisher.publishEvent(...)` ein beliebiges
+POJO/`record` als Event.
+
+Datei: `WebApp/src/main/java/de/fi/webapp/service/internal/PersonServiceImpl.java`
+
+```java
+private final ApplicationEventPublisher applicationEventPublisher;
+
+@Override
+public void speichern(Person person) throws PersonenServiceException {
+    try {
+        validieren(person);
+        if (repo.existsById(person.getId())) throw new AlreadyExistsException("Datensatz existiert bereits");
+        repo.save(mapper.convert(person));
+        applicationEventPublisher.publishEvent(new PersonCreatedEvent(person.getId(), person.getVorname(), person.getNachname()));
+    } catch (AlreadyExistsException e) {
+        throw e;
+    } catch (RuntimeException e) {
+        throw new PersonenServiceException("Fehler beim Speichern",  e);
+    }
+}
+```
+
+`ApplicationEventPublisher` ist eine von Spring bereitgestellte
+Schnittstelle - genau genommen implementiert der `ApplicationContext`
+(der Container selbst, siehe Kapitel 2, 2.1) dieses Interface. Dank
+`@RequiredArgsConstructor` (Kapitel 2, 2.3) muessen wir dafuer nicht
+einmal einen eigenen Konstruktor-Parameter schreiben - das zusaetzliche
+`final`-Feld reicht. `publishEvent(...)` wird erst aufgerufen,
+NACHDEM `repo.save(...)` erfolgreich war - schlaegt das Speichern
+fehl, wird gar kein Event ausgeloest.
+
+Datei: `WebApp/src/main/java/de/fi/webapp/MyEventListener.java`
+
+```java
+@Component
+public class MyEventListener {
+
+    @EventListener
+    public void handlePersonCreatedEvent(PersonCreatedEvent event) {
+        System.out.println("PersonCreatedEvent wurde ausgloest");
+        System.out.println(event.toString());
+    }
+}
+```
+
+`MyEventListener` ist eine ganz normale `@Component`-Bean (Kapitel 2).
+`@EventListener` markiert eine Methode als Empfaenger - Spring
+entscheidet allein anhand des **Parametertyps** (`PersonCreatedEvent`),
+welche Methode bei welchem Event aufgerufen wird, keine explizite
+Registrierung noetig.
+
+> **Merksatz:** `PersonServiceImpl` kennt `MyEventListener` nicht, und
+> `MyEventListener` kennt `PersonServiceImpl` nicht - beide kennen nur
+> `PersonCreatedEvent`. Das ist das Observer-Pattern, von Spring als
+> Publish/Subscribe-Mechanismus fertig bereitgestellt. Im Unterschied
+> zu einer direkten Abhaengigkeit (`PersonServiceImpl` haette
+> `MyEventListener` per Konstruktor injiziert) lassen sich beliebig
+> viele weitere Listener ergaenzen (z.B. eine Mail-Benachrichtigung),
+> OHNE `PersonServiceImpl` anzufassen.
+
+> **Diskussionsfrage:** `@EventListener` (ohne weitere Angaben) laeuft
+> standardmaessig **synchron und in derselben Transaktion** wie der
+> Publisher - `handlePersonCreatedEvent` wird also noch INNERHALB der
+> `@Transactional`-Klammer von `speichern()` (3.11) ausgefuehrt. Was
+> wuerde passieren, wenn der Listener selbst eine `RuntimeException`
+> wirft? Und welchen Unterschied wuerde
+> `@TransactionalEventListener(phase = AFTER_COMMIT)` machen?
+
+### Kapitel 3 (Fortsetzung): Komplexe Abfragen und Custom-Repository-Implementierungen
+
+#### 3.19 Zurueck zu Tag 2: `@Query`, Projektionen und die dritte Repository-Strategie
+
+In Tag 2 (3.5/3.6) hatten wir zwei Wege gesehen, wie `PersonenRepository`
+zu seinen Abfragen kommt: `CrudRepository` (Standard-Operationen, keine
+Zeile eigenen Codes) und die Methodennamen-Konvention (`findByVorname`).
+`PersonenRepository` zeigt inzwischen alle drei Strategien gleichzeitig:
+
+```java
+public interface PersonenRepository extends CrudRepository<PersonEntity, UUID>, PersonenCustomRepository {
+
+    Iterable<PersonEntity> findByVorname(String vorname);
+
+    @Query("select new de.fi.webapp.persistence.entity.TinyPerson(p.id, p.nachname) from PersonEntity p")
+    Iterable<TinyPerson> egal();
+
+    Iterable<TinyPerson> findAllProjectByVorname(String vorname);
+}
+```
+
+- `egal()` nutzt eigenes JPQL (`@Query(...)`) mit einer sogenannten
+  **Constructor-Expression** (`select new ...Entity(...) from ...`):
+  Statt ganze `PersonEntity`-Objekte zu laden, baut JPA pro Zeile
+  direkt ein `TinyPerson` (ein `record` mit nur `id`/`nachname`, siehe
+  `persistence/entity/TinyPerson.java`). Nuetzlich, wenn eine Liste
+  nicht jede Spalte braucht - es wird auch nur `id`/`nachname` aus der
+  Datenbank gelesen, nicht die komplette Zeile.
+- `findAllProjectByVorname(String vorname)` zeigt, dass sich dieselbe
+  Projektions-Idee sogar OHNE eigenes `@Query` mit der
+  Methodennamen-Konvention (Tag 2, 3.6) kombinieren laesst: Spring Data
+  erkennt am Rueckgabetyp (`Iterable<TinyPerson>` statt
+  `Iterable<PersonEntity>`), dass hier eine **DTO-Projektion**
+  gewuenscht ist, leitet die Filterbedingung wie gewohnt aus dem
+  Methodennamen ab (`findBy` + `Vorname`) und baut das Ergebnis
+  automatisch ueber den passenden `TinyPerson`-Konstruktor zusammen.
+
+Datei: `WebApp/src/main/java/de/fi/webapp/persistence/repository/PersonenCustomRepository.java`
+
+```java
+public interface PersonenCustomRepository {
+    void onlySave(PersonEntity personEntity);
+}
+```
+
+Datei: `WebApp/src/main/java/de/fi/webapp/persistence/repository/PersonenCustomRepositoryImpl.java`
+
+```java
+public class PersonenCustomRepositoryImpl implements PersonenCustomRepository {
+
+    @PersistenceContext
+    private EntityManager em;
+
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onlySave(final PersonEntity personEntity) {
+        try {
+            em.persist(personEntity);
+            em.flush();
+        } catch (EntityExistsException | DataIntegrityViolationException e) {
+            throw new AlreadyExistsException(e.getMessage());
+        }
+    }
+}
+```
+
+Manchmal reicht selbst `@Query` nicht mehr aus - z.B. wenn man volle
+Kontrolle ueber die JPA-API selbst braucht. Das ist die **dritte**
+Repository-Strategie: eine **Custom-Repository-Implementierung**, in
+der man ganz normalen Java-Code gegen den `EntityManager` schreibt.
+
+- `@PersistenceContext` injiziert den `EntityManager` - eine weitere
+  Auspraegung von Dependency Injection (Kapitel 1), diesmal aber ueber
+  die **JPA-Standard-Annotation**, nicht ueber Spring's `@Autowired`
+  (funktioniert daher auch ausserhalb von Spring, in jedem
+  JPA-Container).
+- `em.persist(...)` gefolgt von `em.flush()` erzwingt, dass der
+  `INSERT` **sofort** an die Datenbank geschickt wird - anders als
+  `save()` von `CrudRepository`, das Hibernate normalerweise erst am
+  Ende der Transaktion (beim "Dirty Checking") tatsaechlich
+  ausfuehrt. Dadurch laesst sich ein Verstoss gegen einen
+  Datenbank-Constraint (z.B. doppelte ID) sofort hier abfangen.
+- `@Transactional(propagation = Propagation.REQUIRES_NEW)` startet
+  bewusst eine **eigene, neue** Transaktion, unabhaengig von einer
+  eventuell schon laufenden - der Gegenpol zu `Propagation.REQUIRED`
+  (3.11), das eine laufende Transaktion wiederverwendet.
+- `EntityExistsException`/`DataIntegrityViolationException` (technische
+  JPA-/Datenbank-Exceptions) werden direkt hier in die fachliche
+  `AlreadyExistsException` (3.16) uebersetzt - diesmal schon in der
+  **Persistence-Schicht**, nicht erst im Service.
+
+**Wie die drei Strategien zusammenspielen:**
+
+```java
+public interface PersonenRepository extends CrudRepository<PersonEntity, UUID>, PersonenCustomRepository {
+```
+
+`PersonenRepository` erbt gleichzeitig von `CrudRepository` (Strategie
+1: automatischer Proxy zur Laufzeit, Tag 2, 3.5) UND von
+`PersonenCustomRepository` (Strategie 3: Handschrift). Spring Data
+erkennt allein an der Namenskonvention (`PersonenCustomRepository` +
+Suffix `Impl` = `PersonenCustomRepositoryImpl`), dass Aufrufe von
+`onlySave(...)` an genau diese handgeschriebene Klasse delegiert
+werden sollen - keine explizite Verdrahtung noetig, derselbe
+"finde die passende Implementierung automatisch"-Mechanismus wie bei
+`CrudRepository` selbst.
+
+`PersonServiceImpl.speichern()` (3.10) ruft entsprechend nicht mehr
+`repo.save(...)`, sondern `repo.onlySave(...)`:
+
+```java
+repo.onlySave(mapper.convert(person));
+applicationEventPublisher.publishEvent(new PersonCreatedEvent(person.getId(), person.getVorname(), person.getNachname()));
+```
+
+> **Diskussionsfrage:** Die Uebersetzung von `EntityExistsException`
+> in `AlreadyExistsException` passiert hier bereits im Repository
+> (`PersonenCustomRepositoryImpl`) - obwohl `PersonServiceImpl.speichern()`
+> diesen Fall bisher selbst schon ueber `repo.existsById(...)` vorab
+> prueft (3.10). Doppelt gemoppelt, oder sinnvolle Absicherung gegen
+> einen Race Condition (zwei gleichzeitige Requests fuer dieselbe ID)?
+
 ### Noch offen
 
 Bewusst zurueckgestellt, Themen fuer einen der naechsten Termine:
@@ -1580,20 +1913,10 @@ Bewusst zurueckgestellt, Themen fuer einen der naechsten Termine:
   produktive Nachfolger von `LoggerProxy` (Kapitel 1) und dem
   Proxy-Prinzip hinter Spring Data (Tag 2, 3.5); im Projekt noch
   nicht angelegt.
-- **REST-Endpoints gegen den laufenden Container testen**
-  (`@SpringBootTest(webEnvironment = RANDOM_PORT)`,
-  `TestRestTemplate`, `@MockitoBean`) im Kontrast zum reinen
-  Mockito-Test (3.14) - aktuell existiert nur der triviale
-  `WebAppApplicationTests.contextLoads()`-Test.
-- Der erste eigene `@Test` in `PersonServiceImplTest` (siehe 3.14).
 - **Zweites `@Bean`-Beispiel fuer komplexe Erzeugung aus externen
   Werten** (z.B. YAML via `@PropertySource`/`@ConfigurationProperties`,
   siehe 3.13).
-- **Komplexe Abfragen** (`@Query`, Projektionen ueber `TinyPerson`,
-  siehe Tag 2, 3.6) im Detail.
 - `OtherRunner` (`@Order`) und `Person.java` (Lombok) aus Kapitel 2 -
   weiterhin vorbereitet, noch nicht im Detail behandelt.
-- **Events** (`ApplicationEventPublisher`) - nur, falls noch Zeit
-  bleibt.
 - **Swagger/OpenAPI im Detail** (`@Operation`/`@ApiResponses`,
   bisher nur am Rande in Tag 1 erwaehnt).
